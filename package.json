@@ -1,18 +1,32 @@
 {
   "name": "crypto-tools",
-  "version": "1.0.0",
-  "description": "",
+  "version": "2.0.0",
+  "description": "Solana 钱包清理工具 - 自动回收租金、管理 ALT 和 Token 账户",
   "main": "clean-solana.js",
+  "bin": {
+    "clean-solana": "./clean-solana.js"
+  },
   "scripts": {
+    "start": "node clean-solana.js",
+    "dry-run": "node clean-solana.js --dry-run",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/SHLE1/crypto-tools.git"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "solana",
+    "crypto",
+    "wallet",
+    "cleanup",
+    "rent",
+    "token",
+    "spl",
+    "address-lookup-table"
+  ],
+  "author": "SHLE1",
+  "license": "MIT",
   "type": "commonjs",
   "bugs": {
     "url": "https://github.com/SHLE1/crypto-tools/issues"

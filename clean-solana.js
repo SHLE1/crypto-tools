@@ -1,29 +1,15 @@
-const { 
-    Connection, 
-    Keypair, 
-    PublicKey, 
-    AddressLookupTableProgram, 
-    Transaction, 
-    sendAndConfirmTransaction, 
-    ComputeBudgetProgram 
-} = require('@solana/web3.js'); 
+#!/usr/bin/env node
 
-const { 
-    createCloseAccountInstruction, 
-    TOKEN_PROGRAM_ID 
-} = require('@solana/spl-token'); 
+/**
+ * Solana 钱包清理工具
+ * 交互式菜单，集成所有清理功能
+ */
 
-// === 兼容性导入检查 (bs58) ===
-let bs58; 
-try { 
-    const _bs58 = require('bs58'); 
-    bs58 = _bs58.default || _bs58; 
-} catch (e) { 
-    console.error("无法加载 bs58 库，请运行: npm install bs58"); 
-    process.exit(1); 
-} 
+const { getConnection, getRpcUrl } = require('./lib/connection');
+const { getWallet, confirmWallet } = require('./lib/wallet');
+const { estimateAltRent, deactivateAllAlt, closeAllAlt } = require('./lib/alt');
+const { estimateTokenRent, closeEmptyTokenAccounts } = require('./lib/tokens');
 
-// === 引入 prompts (交互式输入) ===
 let prompts;
 try {
     prompts = require('prompts');
@@ -32,171 +18,133 @@ try {
     process.exit(1);
 }
 
-const BATCH_SIZE = 12; 
-const PRIORITY_FEE = 1000; 
-const ALT_PROGRAM_ID = new PublicKey("AddressLookupTab1e1111111111111111111111111"); 
+// 解析命令行参数
+const args = process.argv.slice(2);
+const isDryRun = args.includes('--dry-run') || args.includes('-d');
 
-// === 批量处理函数 ===
-async function processInstructionsBatched(connection, authority, instructions, actionName) { 
-    if (instructions.length === 0) { 
-        console.log(`没有需要执行的 ${actionName} 操作。`); 
-        return; 
-    } 
+/**
+ * 显示租金预览
+ */
+async function showRentPreview(connection, publicKey) {
+    console.log('\n📊 正在估算可回收租金...\n');
 
-    const totalBatches = Math.ceil(instructions.length / BATCH_SIZE); 
-    console.log(`\n🚀 准备执行 ${actionName}: 总计 ${instructions.length} 个指令，分为 ${totalBatches} 批交易处理...`); 
+    const [altRent, tokenRent] = await Promise.all([
+        estimateAltRent(connection, publicKey),
+        estimateTokenRent(connection, publicKey)
+    ]);
 
-    let successCount = 0; 
-    let failCount = 0; 
+    console.log('┌──────────────────────────────────────────────┐');
+    console.log('│              💰 租金预览                      │');
+    console.log('├──────────────────────────────────────────────┤');
+    console.log(`│ 地址查找表 (ALT)     : ${altRent.count.toString().padStart(4)} 个 ≈ ${altRent.sol.toFixed(4)} SOL │`);
+    console.log(`│ Token 空账户         : ${tokenRent.token.count.toString().padStart(4)} 个 ≈ ${tokenRent.token.sol.toFixed(4)} SOL │`);
+    console.log(`│ Token 2022 空账户    : ${tokenRent.token2022.count.toString().padStart(4)} 个 ≈ ${tokenRent.token2022.sol.toFixed(4)} SOL │`);
+    console.log('├──────────────────────────────────────────────┤');
 
-    for (let i = 0; i < instructions.length; i += BATCH_SIZE) { 
-        const batchIndex = Math.floor(i / BATCH_SIZE) + 1; 
-        const currentBatch = instructions.slice(i, i + BATCH_SIZE); 
-        
-        try { 
-            const transaction = new Transaction(); 
-            transaction.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE })); 
-            currentBatch.forEach(ix => transaction.add(ix)); 
+    const totalSol = altRent.sol + tokenRent.total.sol;
+    console.log(`│ \x1b[32m总计可回收租金       : ≈ ${totalSol.toFixed(4)} SOL\x1b[0m           │`);
+    console.log('└──────────────────────────────────────────────┘');
 
-            console.log(`正在发送第 ${batchIndex}/${totalBatches} 批交易...`); 
-            
-            const signature = await sendAndConfirmTransaction(connection, transaction, [authority], { 
-                skipPreflight: false, 
-                preflightCommitment: 'confirmed', 
-            }); 
+    return { altRent, tokenRent, totalSol };
+}
 
-            console.log(`✅ 第 ${batchIndex} 批成功 | Sig: ${signature.slice(0, 15)}...`); 
-            successCount += currentBatch.length; 
-        } catch (error) { 
-            console.error(`❌ 第 ${batchIndex} 批失败:`, error.message); 
-            failCount += currentBatch.length; 
-        } 
-    } 
+/**
+ * 一键清理全部
+ */
+async function cleanAll(connection, keypair, options) {
+    console.log('\n🧹 开始一键清理...\n');
 
-    console.log(`\n📊 ${actionName} 完成报告: 成功 ${successCount} 个, 失败 ${failCount} 个。`); 
-} 
+    // 1. 停用所有 ALT
+    console.log('>>> 步骤 1/3: 停用地址查找表');
+    await deactivateAllAlt(connection, keypair, options);
 
-// === 业务逻辑函数 ===
-async function deactivateAll(connection, authority) { 
-    console.log("正在查找准备停用的查找表...", authority.publicKey.toBase58()); 
-    const accounts = await connection.getProgramAccounts(ALT_PROGRAM_ID, { 
-        filters: [{ memcmp: { offset: 22, bytes: authority.publicKey.toBase58() } }] 
-    }); 
+    // 2. 关闭所有 ALT（可能有些需要等待冷却期）
+    console.log('\n>>> 步骤 2/3: 关闭地址查找表');
+    await closeAllAlt(connection, keypair, options);
 
-    if (accounts.length === 0) return console.log("没有找到查找表。"); 
+    // 3. 关闭所有空 Token 账户
+    console.log('\n>>> 步骤 3/3: 关闭空代币账户');
+    await closeEmptyTokenAccounts(connection, keypair, options);
 
-    const instructions = accounts.map(account => 
-        AddressLookupTableProgram.deactivateLookupTable({ 
-            lookupTable: account.pubkey, authority: authority.publicKey 
-        }) 
-    ); 
-    await processInstructionsBatched(connection, authority, instructions, "停用地址查找表"); 
-} 
+    console.log('\n✨ 一键清理完成！');
+}
 
-async function closeAll(connection, authority) { 
-    console.log("正在查找准备关闭的查找表...", authority.publicKey.toBase58()); 
-    const accounts = await connection.getProgramAccounts(ALT_PROGRAM_ID, { 
-        filters: [{ memcmp: { offset: 22, bytes: authority.publicKey.toBase58() } }] 
-    }); 
-
-    if (accounts.length === 0) return console.log("没有找到查找表。"); 
-
-    const instructions = accounts.map(account => 
-        AddressLookupTableProgram.closeLookupTable({ 
-            lookupTable: account.pubkey, authority: authority.publicKey, recipient: authority.publicKey 
-        }) 
-    ); 
-    await processInstructionsBatched(connection, authority, instructions, "关闭地址查找表"); 
-} 
-
-async function closeTokenAccounts(connection, owner) { 
-    console.log("正在扫描 Token 账户...", owner.publicKey.toBase58()); 
-    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(owner.publicKey, { programId: TOKEN_PROGRAM_ID }); 
-    const accountsToClose = tokenAccounts.value.filter(account => account.account.data.parsed.info.tokenAmount.uiAmount === 0); 
-    
-    if (accountsToClose.length === 0) return console.log("没有发现空 Token 账户。"); 
-
-    const instructions = accountsToClose.map(account => 
-        createCloseAccountInstruction(new PublicKey(account.pubkey), owner.publicKey, owner.publicKey) 
-    ); 
-    await processInstructionsBatched(connection, owner, instructions, "关闭空 Token 账户"); 
-} 
-
-// === 主程序 ===
-async function main() { 
+/**
+ * 主程序
+ */
+async function main() {
     const onCancel = () => {
         console.log("\n🛑 用户取消操作");
         process.exit(0);
     };
 
-    try { 
-        const connection = new Connection("https://api.mainnet-beta.solana.com", "confirmed"); 
+    try {
+        const connection = getConnection();
 
         console.log('------------------------------------------------');
-        
-        // 步骤 1: 输入私钥 (使用 invisible 类型避免刷屏)
-        const keyResponse = await prompts({
-            type: 'invisible', 
-            name: 'privateKey',
-            message: '请输入你的私钥 (隐形模式，粘贴后按回车)',
-            validate: value => value.length > 0 ? true : '私钥不能为空'
-        }, { onCancel });
+        console.log(`🌐 RPC: ${getRpcUrl()}`);
 
-        // 解析私钥
-        let keypair; 
-        try { 
-            const cleanInput = keyResponse.privateKey.trim(); 
-            const secretKey = bs58.decode(cleanInput); 
-            keypair = Keypair.fromSecretKey(secretKey); 
-        } catch(e) { 
-            console.error("\n❌ 私钥解析失败，请检查格式是否正确。"); 
-            process.exit(1); 
-        } 
+        if (isDryRun) {
+            console.log('\x1b[33m⚠️  Dry Run 模式 - 不会执行实际交易\x1b[0m');
+        }
 
-        // 步骤 2: 显示地址并确认
-        console.log(`\n🔍 识别到的钱包地址: \x1b[36m${keypair.publicKey.toBase58()}\x1b[0m`);
-        
-        const confirmResponse = await prompts({
-            type: 'confirm',
-            name: 'isCorrect',
-            message: '请确认这是你的钱包地址吗？',
-            initial: true
-        }, { onCancel });
+        // 获取钱包
+        const keypair = await getWallet(onCancel);
 
-        if (!confirmResponse.isCorrect) {
+        // 确认钱包地址
+        const isConfirmed = await confirmWallet(keypair, onCancel);
+        if (!isConfirmed) {
             console.log("\n🛑 操作已中止，请重新运行并输入正确的私钥。");
             return;
         }
 
-        // 步骤 3: 选择操作
+        // 选择操作
         const actionResponse = await prompts({
             type: 'select',
             name: 'action',
             message: '请选择要执行的操作',
             choices: [
-                { title: '1. 停用所有地址查找表 (Deactivate)', value: '1' },
-                { title: '2. 关闭所有地址查找表 (Close) [需先停用]', value: '2' },
-                { title: '3. 关闭所有空代币账户 (Close Token Accounts)', value: '3' }
+                { title: '📊 预览可回收租金', value: 'preview' },
+                { title: '🧹 一键清理全部', value: 'all' },
+                { title: '━━━━━━━━━━━━━━━━━━', value: 'separator', disabled: true },
+                { title: '1. 停用所有地址查找表 (Deactivate)', value: 'deactivate' },
+                { title: '2. 关闭所有地址查找表 (Close) [需先停用]', value: 'close-alt' },
+                { title: '3. 关闭所有空代币账户 (含 Token 2022)', value: 'close-tokens' }
             ],
             initial: 0
         }, { onCancel });
 
         const choice = actionResponse.action;
-        
+        const options = { dryRun: isDryRun };
+
         console.log(`\n🚀 开始执行...`);
-        console.time("Execution Time"); 
+        console.time("执行耗时");
 
-        switch (choice) { 
-            case '1': await deactivateAll(connection, keypair); break; 
-            case '2': await closeAll(connection, keypair); break; 
-            case '3': await closeTokenAccounts(connection, keypair); break; 
-            default: console.log('❌ 无效选择。'); 
-        } 
-        console.timeEnd("Execution Time"); 
+        switch (choice) {
+            case 'preview':
+                await showRentPreview(connection, keypair.publicKey);
+                break;
+            case 'all':
+                await cleanAll(connection, keypair, options);
+                break;
+            case 'deactivate':
+                await deactivateAllAlt(connection, keypair, options);
+                break;
+            case 'close-alt':
+                await closeAllAlt(connection, keypair, options);
+                break;
+            case 'close-tokens':
+                await closeEmptyTokenAccounts(connection, keypair, options);
+                break;
+            default:
+                console.log('❌ 无效选择。');
+        }
 
-    } catch (error) { 
-        console.error('\n❌ 运行错误:', error.message); 
+        console.timeEnd("执行耗时");
+
+    } catch (error) {
+        console.error('\n❌ 运行错误:', error.message);
     }
-} 
+}
 
 main();

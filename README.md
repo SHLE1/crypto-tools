@@ -4,17 +4,20 @@
 
 ## 🌟 核心功能
 
-- **一键清理 (`clean-solana.js`)**: 提供交互式菜单，集成以下所有功能，适合个人用户。
+- **📊 租金预览**: 一键查看所有可回收的 SOL 租金
+- **🧹 一键清理**: 自动执行所有清理操作
 - **地址查找表 (ALT) 管理**:
-  - **批量停用**: 准备销毁不再使用的地址查找表。
-  - **批量关闭**: 永久关闭查找表并**回收 SOL 租金**。
+  - 批量停用、关闭查找表并**回收 SOL 租金**
 - **代币账户管理**:
-  - **批量关闭空账户**: 自动识别并关闭余额为 0 的 SPL 代币账户，**收回租金**。
+  - 支持 **Token Program** 和 **Token 2022**
+  - 自动关闭余额为 0 的代币账户
+- **🔄 重试机制**: 网络失败自动重试
+- **🔍 Dry Run 模式**: 预览操作，不执行交易
 
 ## ⚙️ 安装要求
 
 - [Node.js](https://nodejs.org/) (建议 v16.x 或以上版本)
-- 一个包含少量 SOL 用于支付手续费（Priority Fee）的 Solana 钱包
+- 一个包含少量 SOL 用于支付手续费的 Solana 钱包
 
 ## 📥 快速开始
 
@@ -30,21 +33,54 @@
    ```
 
 3. **运行工具**:
-   我们推荐使用交互式主脚本：
    ```bash
    node clean-solana.js
    ```
 
-## 🛠️ 脚本说明
+   或使用 Dry Run 模式预览操作：
+   ```bash
+   node clean-solana.js --dry-run
+   ```
 
-如果你需要执行特定任务，可以直接运行子脚本：
+## 🔧 环境变量配置（可选）
 
-| 脚本文件 | 功能描述 |
+复制 `.env.example` 为 `.env` 进行配置：
+
+```bash
+cp .env.example .env
+```
+
+支持的环境变量：
+
+| 变量名 | 说明 | 默认值 |
+| :--- | :--- | :--- |
+| `SOLANA_RPC_URL` | 自定义 RPC 节点 | 公共主网 RPC |
+| `SOLANA_PRIVATE_KEY` | 私钥（避免交互输入） | 运行时输入 |
+
+> ⚠️ **警告**: 请勿将 `.env` 文件提交到版本控制！
+
+## 📁 项目结构
+
+```
+crypto-tools/
+├── clean-solana.js      # 主程序入口
+├── lib/
+│   ├── index.js         # 模块导出
+│   ├── connection.js    # RPC 连接管理
+│   ├── wallet.js        # 钱包管理
+│   ├── transaction.js   # 交易批处理
+│   ├── alt.js           # ALT 管理
+│   └── tokens.js        # Token 账户管理
+├── .env.example         # 环境变量示例
+└── package.json
+```
+
+## 🛠️ NPM 脚本
+
+| 命令 | 说明 |
 | :--- | :--- |
-| `clean-solana.js` | **推荐**。交互式菜单，包含所有功能。 |
-| `deactivate-all-ALT.js` | 批量停用所有的地址查找表。 |
-| `close-all-ALT.js` | 批量关闭已停用的地址查找表（需停用后 1 个 slot 才能操作）。 |
-| `close-tokens.js` | 批量关闭所有余额为 0 的代币账户。 |
+| `npm start` | 运行清理工具 |
+| `npm run dry-run` | Dry Run 模式 |
 
 ## ⚠️ 安全与隐私
 
@@ -53,9 +89,12 @@
 - **租金回收**: 回收的 SOL 会立即返回到你的主钱包地址。
 
 ## 📄 开源协议
+
 本项目基于 [MIT License](LICENSE) 许可协议。
 
 ---
 
 **💡 小提示**: 
-在执行 `close-all-ALT.js` 之前，请确保你已经运行过 `deactivate-all-ALT.js`，因为 Solana 协议规定查找表必须先停用才能被关闭。
+- 使用 `--dry-run` 参数可以安全地预览所有操作
+- 建议使用自定义 RPC 节点以获得更好的性能
+- Token 2022 代币账户也会被自动检测和清理
