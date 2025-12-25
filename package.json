@@ -17,5 +17,11 @@
   "bugs": {
     "url": "https://github.com/SHLE1/crypto-tools/issues"
   },
-  "homepage": "https://github.com/SHLE1/crypto-tools#readme"
+  "homepage": "https://github.com/SHLE1/crypto-tools#readme",
+  "dependencies": {
+    "@solana/spl-token": "^0.4.14",
+    "@solana/web3.js": "^1.98.4",
+    "bs58": "^6.0.0",
+    "prompts": "^2.4.2"
+  }
 }
